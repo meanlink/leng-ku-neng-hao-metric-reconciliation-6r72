@@ -1,14 +1,17 @@
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from .closing_schemas import Evidence, Quantity
+from .services.master_demand_math import is_quarter_hour
 
 Site = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
 Rate = Annotated[Decimal, Field(ge=0, max_digits=8, decimal_places=4)]
 Demand = Annotated[Decimal, Field(ge=0, max_digits=10, decimal_places=3)]
 Subtotal = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=2)]
+Slot = Annotated[str, StringConstraints(strip_whitespace=True, min_length=5, max_length=5)]
+Revision = Annotated[int, Field(ge=1, le=9999)]
 
 
 class TariffIn(BaseModel):
@@ -33,4 +36,35 @@ class BillIn(BaseModel):
 
 class BillDecision(BaseModel):
     decision: Literal['approved', 'returned']
+    note: Evidence
+
+
+class MasterLoadIn(BaseModel):
+    """单条每刻钟负荷导入记录。"""
+    site: Site
+    slot: Slot
+    revision: Revision
+    load_kw: Demand
+
+    @field_validator('slot')
+    @classmethod
+    def _quarter_slot(cls, value):
+        if not is_quarter_hour(value):
+            raise ValueError('刻钟时点格式应为 HH:MM 且分钟为 00/15/30/45')
+        return value
+
+
+class MasterImportIn(BaseModel):
+    """一次批量导入：同一批次可含两站、多个刻钟的（乱序）修订记录。"""
+    import_batch: Annotated[str, StringConstraints(strip_whitespace=True, min_length=4, max_length=60)]
+    loads: list[MasterLoadIn] = Field(min_length=1, max_length=5000)
+
+
+class MasterReviewIn(BaseModel):
+    """按当前有效源数据提交总表需量费分摊复核单。"""
+    demand_rate: Rate = Field(gt=0)
+
+
+class MasterDecision(BaseModel):
+    decision: Literal['approved']
     note: Evidence

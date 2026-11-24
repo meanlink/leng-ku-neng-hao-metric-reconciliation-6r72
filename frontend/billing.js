@@ -1,4 +1,5 @@
 import { billingForms } from './billing-forms.js';
+import { masterDemand } from './master-demand.js';
 
 const readiness = {
   missing_tariff: ['warn', '缺少价表'], missing_invoice: ['warn', '待录账单'],
@@ -8,8 +9,9 @@ const readiness = {
 const exceptions = {meter_gap: '电量超差', demand_gap: '计费需量不符', charge_gap: '金额超差'};
 const statusTag = key => `<span class="tag ${readiness[key][0]}">${readiness[key][1]}</span>`;
 
-export function billingPages({ state, api, esc, fmt, render, openForm }) {
+export function billingPages({ state, api, esc, fmt, render, openForm, toast }) {
   const forms = billingForms({ api, esc, openForm });
+  const master = masterDemand({ api, esc, fmt, openForm, toast, render, state });
   let sheet;
 
   function action(name, index, label, style = 'secondary') {
@@ -70,12 +72,14 @@ export function billingPages({ state, api, esc, fmt, render, openForm }) {
       : sheet.status === 'published' ? '此月报在签发时未启用供应商账单核验。'
       : sheet.enabled ? `签发前须完成所有站点的账单复核。待完成 ${blockerCount} 个站点。`
       : '经理登记第一张站点价表后，本月报启用供应商账单核验。';
+    const masterSection = await master.page(selected.id);
     return `<section class="card billing-summary"><div class="section-title">站点账单核验
       <label class="closing-picker">核算周期<select id="billing-report">${reports.map(report =>
         `<option value="${report.id}" ${report.id === selected.id ? 'selected' : ''}>${esc(report.period)}</option>`).join('')}</select></label>
       </div><div class="notice">${message}</div></section>
       <div class="grid two billing-sites">${sheet.sites.map(siteCard).join('') ||
-        '<div class="card empty">请先生成本月报的站点差异复核单。</div>'}</div>`;
+        '<div class="card empty">请先生成本月报的站点差异复核单。</div>'}</div>
+      <div style="margin-top:18px">${masterSection}</div>`;
   }
 
   function bind() {
@@ -94,6 +98,7 @@ export function billingPages({ state, api, esc, fmt, render, openForm }) {
       if (command === 'tariff' || command === 'invoice') forms[command](sheet, row);
       else forms.decision(sheet, row, command);
     });
+    master.bind();
   }
 
   return { page, bind };

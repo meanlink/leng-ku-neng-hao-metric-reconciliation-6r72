@@ -17,6 +17,7 @@
 - 抄表更正单：保留原始抄表，另一人复核通过后以更正值重算并重新开启受影响的差异单。
 - 站点能耗预算与结算：按月报内的站点配置电量预算和电价，签发时冻结电量、成本及偏差。
 - 供应商账单核验：对照当月站点价表与对账电量，核验供电账单的电量、计费需量及未税小计。退回和重报均保留版本与证据。
+- 总表需量费分摊：两座冷库共用总表时，导入两站每刻钟负荷，按两站同刻负荷之和的月峰值核验总表需量费，并按峰值时刻各站负荷比例分摊到各自账单。
 
 主流程是 `抄表 → 指标计算 → 差异复核 → 月报发布`。单位或周期不兼容时拒绝计算/发布，复核单未关闭时拒绝归档。
 
@@ -59,9 +60,26 @@ docker compose exec -T backend python -m scripts.seed_demo --with-billing
 
 账单电量允许与对账值相差 1 kWh，需量计费站点的计费需量须一致，金额差须在价表容差内。任何一项超差都须退回核实。价表版本更新或对账电量变化后，原审批不能用于签发。待审旧版须先退回，曾获批的旧版可直接重报。价表和账单由同一月度事务锁保护。首张价表启用该月账单核验，之后必须覆盖月报中的全部站点，签发时仅冻结各站点通过复核的最新版。十月抄表更正和预算演示也由 `--with-billing` 初始化。
 
+## 总表需量费分摊演示
+
+1. 在「供应商账单核验」选 `2027-01`，页面下方「总表需量费分摊」已由种子导入两站各 7 个刻钟负荷；其中主站 `09:15` 乱序补发过修订 2、3，系统只采纳最高修订号，旧版留档不覆盖新版。
+2. 两站同刻对齐后，月峰值为 `09:15` 两站负荷之和 281.75 kW。任一站缺时点时工作台显示「刻钟缺失 · 暂停复核」，接口拒绝提交分摊单。
+3. 分析员登记总表需量单价（元/kW）并提交分摊复核单，系统按峰值时刻各站负荷比例分摊，各站金额四舍五入到分、尾差按最大余数法补齐，分摊合计恒等于总表需量费。
+4. 复核员批准后，若再导入任一站有效修订（同站同刻更高修订号），原审批立即标记为失效（stale），需按当前口径重算并重新复核；本人提交的分摊单不能由本人批准。
+5. 经理签发月报时，峰值时点、两站峰值读数与各站分摊金额随复核单一并冻结。签发之后到达的修订只留档计数，不改变冻结快照，导入入口关闭。
+
+分摊口径在 `services/master_demand_math.py`（纯函数，标准库可测），业务规则在 `services/master_demand.py` 与 `master_demand_store.py`，表结构为 `master_demand_imports`、`master_demand_reviews`、`master_demand_allocations`。复核签名由峰值时点和两站读数组成，源数据一变签名即变，是旧审批失效的判定依据。纯函数与服务层测试位于 `backend/tests`，无需数据库即可运行：
+
+```bash
+cd backend
+python3 -m tests.test_master_demand_math      # 峰值、修订号、分到分守恒
+python3 -m tests.test_master_demand_service   # 导入、失效、复核、冻结全链路
+node tests/parse_loads_test.mjs               # 前端 CSV 解析边界
+```
+
 ## 技术结构
 
-五服务为 `frontend`、`backend`、`worker`、`db`、`redis`。后端使用 FastAPI + PyMySQL，数据库使用 MySQL 8.0，前端为原生 HTML/CSS/JavaScript。JWT、审计日志、请求限流分别在 `backend/src/security.py`、`backend/src/services/audit.py` 和 `backend/src/middlewares/__init__.py` 中实现。共享枚举状态在后端路由和前端 `statusTag` 中各自定义。更正原因和决定状态见 `backend/src/closing_schemas.py`、`backend/src/db.py` 与 `frontend/closing.js`。`services/corrections.py` 和 `services/budgets.py` 承载更正与结算规则，新增业务与签发使用同一核算周期事务锁。账单决定在 `backend/src/billing_schemas.py` 和 `frontend/billing.js` 定义，核验差异枚举见 `backend/src/services/bill_math.py` 与 `frontend/billing.js`。为隔离验收环境可用 `COLDSTORE_DB_VOLUME`、`COLDSTORE_REDIS_VOLUME`、`COLDSTORE_ARTIFACT_VOLUME` 指定卷名。
+五服务为 `frontend`、`backend`、`worker`、`db`、`redis`。后端使用 FastAPI + PyMySQL，数据库使用 MySQL 8.0，前端为原生 HTML/CSS/JavaScript。JWT、审计日志、请求限流分别在 `backend/src/security.py`、`backend/src/services/audit.py` 和 `backend/src/middlewares/__init__.py` 中实现。共享枚举状态在后端路由和前端 `statusTag` 中各自定义。更正原因和决定状态见 `backend/src/closing_schemas.py`、`backend/src/db.py` 与 `frontend/closing.js`。`services/corrections.py` 和 `services/budgets.py` 承载更正与结算规则，新增业务与签发使用同一核算周期事务锁。账单决定在 `backend/src/billing_schemas.py` 和 `frontend/billing.js` 定义，核验差异枚举见 `backend/src/services/bill_math.py` 与 `frontend/billing.js`。总表需量费分摊的纯函数口径在 `services/master_demand_math.py`，工作台前端在 `frontend/master-demand.js`。为隔离验收环境可用 `COLDSTORE_DB_VOLUME`、`COLDSTORE_REDIS_VOLUME`、`COLDSTORE_ARTIFACT_VOLUME` 指定卷名。
 
 ## 算法口径
 

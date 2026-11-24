@@ -51,4 +51,28 @@ def seed_billing():
         file_invoice(report['id'], BillIn(site=main_site, invoice_number='BL-2701-017', invoiced_kwh=12000,
                      observed_peak_kw=169, invoiced_demand_kw=200, invoice_subtotal=17160,
                      evidence='BL-2701-017.pdf 第 2 页。最大需量记录显示 169 kW，账单计费栏为 200 kW。'), users['analyst'])
+    seed_master_demand(cur, report['id'], main_site, east_site, users)
     print('billing seed ok: January 2027, 2 sites, tariff demand floor and pending 720 CNY exception')
+
+
+def seed_master_demand(cur, report_id, main_site, east_site, users):
+    """总表需量费分摊演示：两站每刻钟负荷，含乱序补发的修订号。"""
+    cur.execute('SELECT COUNT(*) AS n FROM master_demand_imports WHERE report_id=%s', (report_id,))
+    if cur.fetchone()['n']:
+        return
+    # 两站同刻对齐；峰值出现在 09:15：主站 176.5 + 东站 105.25 = 281.75 kW。
+    main_loads = {'08:00': '168.500', '08:15': '172.000', '08:30': '170.250',
+                  '08:45': '174.750', '09:00': '173.500', '09:15': '176.500', '09:30': '171.000'}
+    east_loads = {'08:00': '97.250', '08:15': '99.000', '08:30': '101.750',
+                  '08:45': '100.500', '09:00': '103.250', '09:15': '105.250', '09:30': '102.000'}
+    rows = []
+    for slot, load in main_loads.items():
+        rows.append((report_id, main_site, slot, 1, load, 'jan-quarter-hour-export-2027', users['analyst']['id']))
+    for slot, load in east_loads.items():
+        rows.append((report_id, east_site, slot, 1, load, 'jan-quarter-hour-export-2027', users['analyst']['id']))
+    # 乱序补发：先到主站 09:15 的修订 3，再到更旧的修订 2，验证旧版不能盖掉新版。
+    rows.append((report_id, main_site, '09:15', 3, '176.500', 'jan-late-resend-2027', users['analyst']['id']))
+    rows.append((report_id, main_site, '09:15', 2, '175.000', 'jan-late-resend-2027', users['analyst']['id']))
+    cur.executemany('''INSERT INTO master_demand_imports(report_id,site,slot,revision,load_kw,
+                            import_batch,imported_by) VALUES(%s,%s,%s,%s,%s,%s,%s)''', rows)
+    print('master demand seed ok: 2 sites x 7 quarter slots, out-of-order revisions at 09:15')

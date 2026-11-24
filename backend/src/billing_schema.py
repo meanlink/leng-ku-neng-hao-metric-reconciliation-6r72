@@ -34,4 +34,42 @@ BILLING_SCHEMA = [
       CHECK (revision > 0 AND invoiced_kwh >= 0 AND observed_peak_kw >= 0
              AND invoiced_demand_kw >= 0 AND invoice_subtotal >= 0 AND reconciled_kwh >= 0)
     ) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS master_demand_imports (
+      id INT PRIMARY KEY AUTO_INCREMENT, report_id INT NOT NULL,
+      site VARCHAR(120) NOT NULL, slot CHAR(5) NOT NULL, revision INT NOT NULL,
+      load_kw DECIMAL(10,3) NOT NULL, import_batch VARCHAR(60) NOT NULL,
+      imported_by INT NOT NULL, imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_master_load_revision(report_id, site, slot, revision),
+      KEY ix_master_load_point(report_id, site, slot),
+      FOREIGN KEY(report_id) REFERENCES monthly_reports(id),
+      FOREIGN KEY(imported_by) REFERENCES users(id),
+      CHECK (revision > 0 AND load_kw >= 0)
+    ) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS master_demand_reviews (
+      id INT PRIMARY KEY AUTO_INCREMENT, report_id INT NOT NULL, revision INT NOT NULL,
+      demand_rate DECIMAL(8,4) NOT NULL, peak_slot CHAR(5) NOT NULL,
+      combined_kw DECIMAL(10,3) NOT NULL, total_demand_charge DECIMAL(20,2) NOT NULL,
+      review_signature VARCHAR(500) NOT NULL,
+      status VARCHAR(16) NOT NULL DEFAULT 'pending',
+      submitted_by INT NOT NULL, submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      reviewed_by INT NULL, reviewed_at DATETIME NULL, review_note VARCHAR(500) NULL,
+      frozen_at DATETIME NULL,
+      UNIQUE KEY uq_master_review_revision(report_id, revision),
+      KEY ix_master_review_report(report_id),
+      FOREIGN KEY(report_id) REFERENCES monthly_reports(id),
+      FOREIGN KEY(submitted_by) REFERENCES users(id), FOREIGN KEY(reviewed_by) REFERENCES users(id),
+      CHECK (demand_rate >= 0 AND combined_kw >= 0 AND total_demand_charge >= 0),
+      CHECK (status IN ('pending', 'approved', 'stale')),
+      CHECK ((status = 'pending' AND reviewed_by IS NULL AND reviewed_at IS NULL AND review_note IS NULL)
+             OR (status <> 'pending' AND reviewed_by IS NOT NULL AND reviewed_by <> submitted_by
+                 AND reviewed_at IS NOT NULL AND review_note IS NOT NULL)),
+      CHECK (frozen_at IS NULL OR status = 'approved')
+    ) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS master_demand_allocations (
+      review_id INT NOT NULL, site VARCHAR(120) NOT NULL,
+      peak_load_kw DECIMAL(10,3) NOT NULL, allocated_amount DECIMAL(20,2) NOT NULL,
+      PRIMARY KEY(review_id, site),
+      FOREIGN KEY(review_id) REFERENCES master_demand_reviews(id),
+      CHECK (peak_load_kw >= 0 AND allocated_amount >= 0)
+    ) ENGINE=InnoDB""",
 ]

@@ -2,12 +2,15 @@ from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends
 
-from ..billing_schemas import BillDecision, BillIn, TariffIn
+from ..billing_schemas import (BillDecision, BillIn, MasterDecision, MasterImportIn,
+                               MasterReviewIn, TariffIn)
 from ..db import db_cursor, lock_period
 from ..security import current_user, require_roles
 from ..services.bill_close import billing_sheet
 from ..services.bill_review import review_bill, submit_bill
 from ..services.budgets import report_by_id, report_period
+from ..services.master_demand import (import_loads, master_demand_sheet,
+                                      review_master, submit_master_review)
 from ..services.tariffs import add_tariff
 
 router = APIRouter(prefix='/utility-billing', tags=['供应商账单核验'])
@@ -44,3 +47,30 @@ def decide_invoice(report_id: int, bill_id: int, payload: BillDecision,
                    user=Depends(require_roles('reviewer', 'manager'))):
     with billing_transaction(report_id) as (cur, report):
         return review_bill(cur, report, bill_id, payload, user['sub'])
+
+
+@router.get('/{report_id}/master-demand')
+def read_master_demand(report_id: int, user=Depends(current_user)):
+    with db_cursor(commit=True) as cur:
+        return master_demand_sheet(cur, report_by_id(cur, report_id))
+
+
+@router.post('/{report_id}/master-demand/imports', status_code=201)
+def import_master_demand(report_id: int, payload: MasterImportIn,
+                         user=Depends(require_roles('analyst', 'manager'))):
+    with billing_transaction(report_id) as (cur, report):
+        return import_loads(cur, report, payload, user['sub'])
+
+
+@router.post('/{report_id}/master-demand/reviews', status_code=201)
+def submit_master_demand(report_id: int, payload: MasterReviewIn,
+                         user=Depends(require_roles('analyst', 'manager'))):
+    with billing_transaction(report_id) as (cur, report):
+        return submit_master_review(cur, report, payload, user['sub'])
+
+
+@router.post('/{report_id}/master-demand/reviews/{review_id}/decision')
+def decide_master_demand(report_id: int, review_id: int, payload: MasterDecision,
+                         user=Depends(require_roles('reviewer', 'manager'))):
+    with billing_transaction(report_id) as (cur, report):
+        return review_master(cur, report, review_id, payload, user['sub'])
